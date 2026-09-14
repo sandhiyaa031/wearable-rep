@@ -1,0 +1,34 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# macOS
+.DS_Store
+
+# Data and Checkpoints
+datasets/
+checkpoints/
+
+# IDEs and Editors
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Project specific
+inspection_results/AUDIT_REPORT.txt
+inspection_results/audit_output.txt
+inspection_results/*.png
+inspection_results/*.pt
+inspection_results/mae_reconstructions/
+inspection_results/sisfall_inspection/
