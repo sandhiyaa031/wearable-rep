@@ -42,13 +42,13 @@ EPOCHS_SUPERVISED = 30
 FRACTIONS = [0.25, 0.50, 1.00]
 SEEDS = [42, 43, 44]
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-MAE_WEIGHTS = Path("checkpoints/mae_encoder_best.pt")
+MAE_WEIGHTS = Path("checkpoints/mae_encoder.pt")
 
 def build_model(mode="scratch"):
     # Target architecture
     model = SupervisedTransformer(
-        in_channels=6, patch_size=16, embed_dim=128,
-        num_heads=4, num_layers=4, max_len=8, num_classes=6, dropout_p=0.1
+        in_channels=6, patch_size=4, embed_dim=128,
+        num_heads=4, num_layers=4, max_len=32, num_classes=6, dropout_p=0.1
     ).to(DEVICE)
     
     if mode in ["probe", "finetune"]:

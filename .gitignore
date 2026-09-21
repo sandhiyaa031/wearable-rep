@@ -249,3 +249,8 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 >>>>>>> 2e34facc16209495f19c7616d421dc3cda63396c
+
+*.pt
+checkpoints/
+inspection_results/
+.gemini/

@@ -39,10 +39,10 @@ from models.mae import MAE
 
 # Config
 BATCH_SIZE = 64
-EPOCHS = 100  # shortened from 400 for practical run time
-LR = 1e-4
+EPOCHS = 400
+LR = 3e-4
 WEIGHT_DECAY = 0.05
-MASK_RATIO = 0.75
+MASK_RATIO = 0.25  # Reduced from 0.75! IMU signals lack the redundancy of Vision.
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 CHKPT_DIR = Path("checkpoints")
@@ -61,23 +61,20 @@ def plot_reconstructions(mae, x_true, epoch, num_samples=4):
         x_true_device = x_true.to(DEVICE)
         loss, pred, mask = mae(x_true_device, mask_ratio=MASK_RATIO)
         
-        # pred is (B, 8, 96). We need to reshape back to (B, 128, 6)
+        # pred is (B, N_p, patch_dim). We need to reshape back to (B, 128, 6)
         B, N_p, patch_dim = pred.shape
-        P = 16
+        # Dynamic P
+        P = patch_dim // 6
         C = 6
         
         # Build the full reconstructed sequence
-        # We start with the TRUE sequence, and overwrite the MASKED patches with PRED
-        
         # pred: (B, N_p, P*C) -> (B, N_p, P, C) -> (B, N_p*P, C)
         pred_full = pred.view(B, N_p, P, C).view(B, N_p * P, C).cpu()
         
-        # mask is (B, 8). 1 means masked.
-        # Expand mask to point level: (B, N_p) -> (B, N_p, P) -> view (B, N_p*P)
+        # mask is (B, N_p). 1 means masked.
         mask_expanded = mask.unsqueeze(-1).expand(-1, -1, P).reshape(B, N_p * P).cpu()
         
         composite = x_true.clone()
-        # For every item in batch and time, if masked, use pred_full
         for b in range(B):
             for t in range(128):
                 if mask_expanded[b, t] == 1:
@@ -90,22 +87,15 @@ def plot_reconstructions(mae, x_true, epoch, num_samples=4):
     for i in range(min(num_samples, B)):
         ax = axes[i]
         
-        # Plot true signal (gray)
         ax.plot(x_true[i, :, 0].numpy(), label="True (Acc_X)", color="gray", alpha=0.5, linewidth=2)
         
-        # Highlight visible patches in blue, masked predicted in red
         time_axis = torch.arange(128)
-        
-        # Where mask == 0 (visible)
         vis_idx = time_axis[mask_expanded[i] == 0]
-        # Where mask == 1 (masked geometry imputed)
         msk_idx = time_axis[mask_expanded[i] == 1]
         
-        # Overlay the composite
-        # We plot in segments to get the colors right
-        for p in range(8):
-            start = p * 16
-            end = start + 16
+        for p in range(N_p):
+            start = p * P
+            end = start + P
             if mask[i, p] == 0:
                 ax.plot(range(start, end), composite[i, start:end, 0].numpy(), color="blue", linewidth=1.5)
             else:
@@ -135,14 +125,26 @@ def main():
     val_loader = loaders["val"]
     
     print("\n[2] Building MAE model...")
-    # 128x6 -> P=16 -> 8 tokens -> Enc=128 (4L), Dec=64 (2L)
+    # 128x6 -> P=4 -> 32 tokens -> Enc=128 (4L), Dec=64 (2L)
     model = MAE(
-        in_channels=6, patch_size=16, max_len=8,
+        in_channels=6, patch_size=4, max_len=32,
         enc_embed_dim=128, enc_heads=4, enc_layers=4,
         dec_embed_dim=64, dec_heads=2, dec_layers=2
     ).to(DEVICE)
     
-    optimizer = optim.AdamW(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
+    import math
+    optimizer = optim.AdamW(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY, betas=(0.9, 0.95))
+    
+    total_steps = len(train_loader) * EPOCHS
+    warmup_steps = len(train_loader) * 40  # 40 epochs warmup
+    
+    def lr_lambda(current_step: int):
+        if current_step < warmup_steps:
+            return max(1e-6, float(current_step) / float(max(1, warmup_steps)))
+        progress = float(current_step - warmup_steps) / float(max(1, total_steps - warmup_steps))
+        return 0.5 * (1.0 + math.cos(math.pi * progress))
+        
+    scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
     
     print("\n[3] Starting MAE pretraining (Unlabeled Data Only)...")
     best_val_loss = float('inf')
@@ -162,7 +164,12 @@ def main():
             optimizer.zero_grad()
             loss, _, _ = model(x, mask_ratio=MASK_RATIO)
             loss.backward()
+            
+            # optional clipping for stability
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            
             optimizer.step()
+            scheduler.step()
             
             train_loss += loss.item() * x.size(0)
             
@@ -181,20 +188,21 @@ def main():
         val_loss /= len(val_loader.dataset)
         epoch_t = time.time() - start_t
         
+        current_lr = scheduler.get_last_lr()[0]
         print(f"Epoch {epoch:03d}/{EPOCHS} [{epoch_t:.1f}s] | "
-              f"Train MSE: {train_loss:.4f} | Val MSE: {val_loss:.4f}")
+              f"LR: {current_lr:.6f} | Train MSE: {train_loss:.4f} | Val MSE: {val_loss:.4f}")
               
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             # Save JUST the encoder portion. That is all we need for inference/transfer!
-            torch.save(model.encoder.state_dict(), CHKPT_DIR / "mae_encoder_best.pt")
+            torch.save(model.encoder.state_dict(), CHKPT_DIR / "mae_encoder.pt")
             
         # Visualize every 10 epochs
         if epoch % 10 == 0 or epoch == 1:
             plot_reconstructions(model, fixed_x[:4].clone(), epoch)
             
     print(f"\n[4] MAE Pretraining Complete. Best Val MSE: {best_val_loss:.4f}")
-    print(f"    Encoder weights saved to {CHKPT_DIR / 'mae_encoder_best.pt'}")
+    print(f"    Encoder weights saved to {CHKPT_DIR / 'mae_encoder.pt'}")
     print(f"    Reconstruction plots saved to {OUT_DIR}")
 
 if __name__ == "__main__":

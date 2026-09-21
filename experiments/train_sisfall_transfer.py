@@ -46,7 +46,7 @@ BATCH_SIZE = 64
 EPOCHS = 5
 SEEDS = [42, 43, 44]
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-MAE_WEIGHTS = Path("checkpoints/mae_encoder_best.pt")
+MAE_WEIGHTS = Path("checkpoints/mae_encoder.pt")
 
 def build_model(mode="scratch"):
     """
@@ -54,8 +54,8 @@ def build_model(mode="scratch"):
                     embed=128, classes=2.
     """
     model = SupervisedTransformer(
-        in_channels=9, patch_size=20, embed_dim=128,
-        num_heads=4, num_layers=4, max_len=10, num_classes=2, dropout_p=0.1
+        in_channels=9, patch_size=5, embed_dim=128,
+        num_heads=4, num_layers=4, max_len=40, num_classes=2, dropout_p=0.1
     ).to(DEVICE)
     
     if mode == "finetune":
